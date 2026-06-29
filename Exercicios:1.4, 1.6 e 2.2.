@@ -1,0 +1,165 @@
+clear all; clc; close all;
+
+
+m = 0.030;                     
+g = 9.81;                      
+dx = 0.01; dy = 0.01; dz = 0.01;
+D = diag([dx, dy, dz]);        
+
+
+%  EXERCÍCIO 1.4
+
+A = [0, 0, 0,  1,   0,   0;
+     0, 0, 0,  0,   1,   0;
+     0, 0, 0,  0,   0,   1;
+     0, 0, 0, -dx/m, 0,   0;
+     0, 0, 0,  0, -dy/m, 0;
+     0, 0, 0,  0,   0, -dz/m];
+B = [0, 0, 0;
+     0, 0, 0;
+     0, 0, 0;
+     1, 0, 0;
+     0, 1, 0;
+     0, 0, 1];
+
+rho = 0.1;
+R = rho * eye(3); 
+t = 0:0.01:5;
+x0 = [1; -1; 0.5; 0; 0; 0]; % Condição inicial fora do equilíbrio
+
+% Caso A: Q Padrão
+Q_a = diag([10, 10, 10, 1, 1, 1]);   
+K_a = lqr(A, B, Q_a, R);
+sys_cl_a = ss(A - B*K_a, B, eye(6), 0);
+[~, ~, x_a] = initial(sys_cl_a, x0, t);
+ua_14_Q = -x_a * K_a'; % Cálculo do esforço de controlo u_a = -K*x
+
+% Caso B: Q1 Modificado (Maior peso na posição)
+Q_b = diag([1000, 1000, 1000, 1, 1, 1]);
+K_b = lqr(A, B, Q_b, R);
+sys_cl_b = ss(A - B*K_b, B, eye(6), 0);
+[~, ~, x_b] = initial(sys_cl_b, x0, t);
+ua_14_Q1 = -x_b * K_b'; % Cálculo do esforço de controlo u_a = -K*x
+
+% Gráficos do Exercício 1.4 (Caso A - Q Padrão)
+figure('Name', 'Ex 1.4: LQR Basico - Q Padrao');
+subplot(3,1,1);
+plot(t, x_a(:,1:3), 'LineWidth', 1.5);
+title('Position Response (LQR) - Q = diag([10, 10, 10, 1, 1, 1])');
+ylabel('Position (m)'); legend('p_x', 'p_y', 'p_z'); grid on;
+
+subplot(3,1,2);
+plot(t, x_a(:,4:6), 'LineWidth', 1.5);
+title('Velocity Response (LQR)');
+ylabel('Velocity (m/s)'); legend('v_x', 'v_y', 'v_z'); grid on;
+
+subplot(3,1,3);
+plot(t, ua_14_Q, 'LineWidth', 1.5);
+title('Input Signal Acceleration (u_a)');
+ylabel('Accel (m/s^2)'); xlabel('Time (s)'); legend('u_{ax}', 'u_{ay}', 'u_{az}'); grid on;
+
+% Gráficos do Exercício 1.4 (Caso B - Q1 Modificado)
+figure('Name', 'Ex 1.4: LQR Basico - Q1 Modificado');
+subplot(3,1,1);
+plot(t, x_b(:,1:3), 'LineWidth', 1.5);
+title('Position Response (LQR) - Q1 = diag([1000, 1000, 1000, 1, 1, 1])');
+ylabel('Position (m)'); legend('p_x', 'p_y', 'p_z'); grid on;
+
+subplot(3,1,2);
+plot(t, x_b(:,4:6), 'LineWidth', 1.5);
+title('Velocity Response (LQR)');
+ylabel('Velocity (m/s)'); legend('v_x', 'v_y', 'v_z'); grid on;
+
+subplot(3,1,3);
+plot(t, ua_14_Q1, 'LineWidth', 1.5);
+title('Input Signal Acceleration (u_a)');
+ylabel('Accel (m/s^2)'); xlabel('Time (s)'); legend('u_{ax}', 'u_{ay}', 'u_{az}'); grid on;
+
+
+
+%  EXERCÍCIO 1.6
+
+K_err = lqr(A, B, Q_a, R); %Q padrão
+x_ref = [2; -1; 1.5; 0; 0; 0]; % Estado de referência alvo
+x_inicial = [0; 0; 0; 0; 0; 0]; % Origem
+
+x_tilde_0 = x_inicial - x_ref; % Condição inicial do erro
+
+sys_cl_err = ss(A - B*K_err, B, eye(6), zeros(6,3));
+[~, ~, x_tilde] = initial(sys_cl_err, x_tilde_0, t);
+
+x_real = x_tilde + repmat(x_ref', length(t), 1); % Recuperar a posição absoluta
+ua_16 = -x_tilde * K_err'; % u_a gerado com base no erro de estados
+
+%Gráficos do Exercício 1.6
+figure('Name', 'Ex 1.6: Controlador LQR de Erro');
+subplot(3,1,1);
+p = plot(t, x_real(:,1:3), 'LineWidth', 2); hold on;
+line([0 5], [x_ref(1) x_ref(1)], 'Color', p(1).Color, 'LineStyle', '--', 'LineWidth', 1.5, 'HandleVisibility', 'off'); 
+line([0 5], [x_ref(2) x_ref(2)], 'Color', p(2).Color, 'LineStyle', '--', 'LineWidth', 1.5, 'HandleVisibility', 'off');
+line([0 5], [x_ref(3) x_ref(3)], 'Color', p(3).Color, 'LineStyle', '--', 'LineWidth', 1.5, 'HandleVisibility', 'off');
+hold off; 
+title('Drone Real Position Tracking (x, y, z)');
+ylabel('Position (m)'); legend('x(t)', 'y(t)', 'z(t)', 'Location', 'best'); grid on;
+
+subplot(3,1,2);
+plot(t, x_tilde(:,1:3), 'LineWidth', 2);
+title('Position Error (\tilde{x})');
+ylabel('Error (m)'); legend('e_x', 'e_y', 'e_z'); grid on;
+
+subplot(3,1,3);
+plot(t, ua_16, 'LineWidth', 2);
+title('Input Signal (u_a = -K \cdot \tilde{x})');
+ylabel('Accel (m/s^2)'); xlabel('Tempo (s)'); legend('u_{ax}', 'u_{ay}', 'u_{az}'); grid on;
+
+
+
+%  EXERCÍCIO 2.2: Controlador Não-Linear Baseado em Lyapunov
+
+x_ref_nl = [2; -1; 1.5]; % Posição de Referência 3D
+v_ref_nl = [0; 0; 0];    % Velocidade de Referência 3D
+kp = 10; 
+kv = 5; 
+g_vec = [0; 0; g]; 
+
+
+x_nonlin = zeros(3, length(t));
+v_nonlin = zeros(3, length(t));
+ua_plot = zeros(3, length(t));
+
+x_nonlin(:,1) = [0; 0; 0]; % Posição inicial na origem
+v_nonlin(:,1) = [0; 0; 0]; % Velocidade inicial nula
+dt = 0.01;
+
+for i = 1:length(t)-1
+    % erro de posição e velocidade
+    e_p = x_nonlin(:,i) - x_ref_nl;
+    e_v = v_nonlin(:,i) - v_ref_nl;
+    
+    % lei de controlo não-linear (u_a)
+    ua = -kp*e_p - kv*e_v + (1/m)*D*v_nonlin(:,i) + g_vec;
+    ua_plot(:,i) = ua; 
+    accel = ua - g_vec - (1/m)*D*v_nonlin(:,i);
+    
+    % Método de Integração Numérica de Euler
+    v_nonlin(:,i+1) = v_nonlin(:,i) + accel * dt;
+    x_nonlin(:,i+1) = x_nonlin(:,i) + v_nonlin(:,i+1) * dt;
+end
+ua_plot(:, end) = ua_plot(:, end-1); % Ajuste de dimensões para o plot temporal
+
+%Gráficos do Exercício 2.2
+figure('Name', 'Ex 2.2: Controlador Nao-Linear (Lyapunov)');
+subplot(3,1,1);
+plot(t, x_nonlin, 'LineWidth', 2);
+title('Nonlinear Controller: Position Tracking');
+ylabel('Position (m)'); legend('x', 'y', 'z'); grid on;
+
+subplot(3,1,2);
+plot(t, v_nonlin, 'LineWidth', 2);
+title('Nonlinear Controller: Velocity Performance');
+ylabel('Velocity (m/s)'); legend('v_x', 'v_y', 'v_z'); grid on;
+
+subplot(3,1,3);
+plot(t, ua_plot, 'LineWidth', 2);
+title('Nonlinear Controller: Actuation Input Signal (u_a)');
+ylabel('Accel (m/s^2)'); xlabel('Time (s)'); legend('u_{ax}', 'u_{ay}', 'u_{az}'); grid on;
