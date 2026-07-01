@@ -1,0 +1,305 @@
+import sys
+import time
+import math
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.parameter import Parameter
+from geometry_msgs.msg import PoseStamped
+from crazyflie_interfaces.srv import Takeoff, Land, NotifySetpointsStop, GoTo
+
+from mission_config import get_targets_for_drone, ALL_PILLARS, yaw_to_face_marker
+
+DEFAULT_DRONE_ID = 0
+
+
+class DroneMission(Node):
+    def __init__(self, drone_id):
+        super().__init__(
+            f'drone_mission_apf_{drone_id}',
+            parameter_overrides=[Parameter('use_sim_time', Parameter.Type.BOOL, True)]
+        )
+        self.drone_id = drone_id
+        self.cf_name = f'cf_{drone_id + 1}'  for outra)
+        self.group_mask = 0
+
+        self.get_logger().info(f"=== Missao para {self.cf_name} (drone_id={drone_id}) ===")
+
+        self.takeoff_cli = self.create_client(Takeoff, f'/{self.cf_name}/takeoff')
+        self.land_cli = self.create_client(Land, f'/{self.cf_name}/land')
+        self.goto_cli = self.create_client(GoTo, f'/{self.cf_name}/go_to')
+        self.notify_cli = self.create_client(NotifySetpointsStop, f'/{self.cf_name}/notify_setpoints_stop')
+
+        self.pose = np.array([0.0, 0.0, 0.0])
+        self.pose_received = False
+        self.pose_sub = self.create_subscription(
+            PoseStamped, f'/{self.cf_name}/pose', self.pose_callback, 10
+        )
+
+        self.get_logger().info("Waiting for Crazyflie...")
+        for client, name in [
+            (self.takeoff_cli, 'takeoff'),
+            (self.land_cli, 'land'),
+            (self.goto_cli, 'go_to'),
+            (self.notify_cli, 'notify')
+        ]:
+            while not client.wait_for_service(timeout_sec=1.0):
+                self.get_logger().info(f'Esperando {name}...')
+
+        # TARGETS -------------------------------------------------------
+        self.targets = get_targets_for_drone(drone_id)
+        if not self.targets:
+            self.get_logger().error(f"Nenhum marcador atribuido ao drone_id={drone_id}!")
+        self.all_pillars = ALL_PILLARS
+
+        # parametros desvio + navigation ----------------
+        self.k_att = 1.0
+        self.k_rep = 0.35   
+        self.d_safe = 0.6  
+        self.rep_mag_max = 2.0
+        self.step_size = 0.6
+        self.arrival_radius = 0.25
+        self.goto_duration = 2.5
+        self.settle_time = 0.6
+        self.max_steps_per_leg = 80
+        self.cruise_z = 1.2
+        self.min_obs_dist = 0.15   # < 0.15 considera "colisao iminente" + prioriza so repulsao
+
+    # ------- MAIN FUNCTIONS ----------------------------------------------------
+
+    def pose_callback(self, msg):
+        self.pose[0] = msg.pose.position.x
+        self.pose[1] = msg.pose.position.y
+        self.pose[2] = msg.pose.position.z
+        self.pose_received = True
+
+    def spin_for(self, seconds):
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def wait_for_pose(self, timeout=5.0):
+        end_time = time.time() + timeout
+        while not self.pose_received and time.time() < end_time:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not self.pose_received:
+            self.get_logger().warn("Nenhuma pose recebida ainda... Check this")
+
+    def call_and_wait(self, client, request, label, timeout=15.0):
+        future = client.call_async(request)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout)
+        if not future.done() or future.result() is None:
+            self.get_logger().error(f'{label} fail!')
+            return False
+        return True
+
+    # --- FLIGHT ----------------------------------
+
+    def notify_stop(self):
+        req = NotifySetpointsStop.Request()
+        req.group_mask = self.group_mask
+        req.remain_valid_millisecs = 100
+        self.call_and_wait(self.notify_cli, req, 'notify_stop')
+        self.spin_for(0.5)
+
+    def takeoff(self, height=1.0, duration=4.0):
+        self.get_logger().info(f"Taking off to {height}m...")
+        req = Takeoff.Request()
+        req.group_mask = self.group_mask
+        req.height = float(height)
+        req.duration.sec = int(duration)
+        ok = self.call_and_wait(self.takeoff_cli, req, 'takeoff')
+        self.spin_for(duration + 1.0)
+        return ok
+
+    def land(self, height=0.0, duration=4.0):
+        self.get_logger().info("Landing ...")
+        req = Land.Request()
+        req.group_mask = self.group_mask
+        req.height = float(height)
+        req.duration.sec = int(duration)
+        self.call_and_wait(self.land_cli, req, 'land')
+        self.spin_for(duration + 1.0)
+
+    def go_absolute(self, x, y, z, yaw=0.0, duration=None):
+        if duration is None:
+            duration = self.goto_duration
+
+        req = GoTo.Request()
+        req.group_mask = self.group_mask
+        req.relative = False
+        req.goal.x = float(x)
+        req.goal.y = float(y)
+        req.goal.z = float(z)
+        req.yaw = float(yaw)
+        req.duration.sec = int(duration)
+        req.duration.nanosec = int(round((duration - int(duration)) * 1e9))
+
+        self.call_and_wait(
+            self.goto_cli, req, f'goto({x:.2f},{y:.2f},{z:.2f},yaw={yaw:.2f})',
+            timeout=duration + 3.0
+        )
+        self.spin_for(duration + self.settle_time)
+
+    def climb_to(self, z, duration=3.0, yaw=0.0):
+        self.get_logger().info(f"Adjusting altitude to {z:.2f}m...")
+        self.go_absolute(self.pose[0], self.pose[1], z, yaw=yaw, duration=duration)
+
+    # -------- MOTION PLANNING ---------------------------------
+
+    def order_targets_by_proximity(self, targets, start_xy):
+        remaining = list(targets)
+        ordered = []
+        cur_x, cur_y = start_xy
+
+        while remaining:
+            remaining.sort(key=lambda t: math.hypot(t['x'] - cur_x, t['y'] - cur_y))
+            nearest = remaining.pop(0)
+            ordered.append(nearest)
+            cur_x, cur_y = nearest['x'], nearest['y']
+
+        return ordered
+
+    # ----- NAVIGATION --------------
+
+    def navigate_apf(self, target, cruise_z):
+        self.get_logger().info(f"Inicializing route to: {target['id']} ")
+        target_yaw = yaw_to_face_marker(target['yaw'])
+
+        steps = 0
+        last_dist = None
+        consecutive_increases = 0
+        current_step_size = self.step_size
+
+        while rclpy.ok() and steps < self.max_steps_per_leg:
+            steps += 1
+
+            dx = target['x'] - self.pose[0]
+            dy = target['y'] - self.pose[1]
+            dist_to_target = math.hypot(dx, dy)
+
+            if dist_to_target < self.arrival_radius:
+                self.get_logger().info(
+                    f">> Horizontal position reached for {target['id']}, adjusting final Z/yaw"
+                )
+                break
+
+            if last_dist is not None and dist_to_target > last_dist + 0.05:
+                consecutive_increases += 1
+                self.get_logger().warn(
+                    f"distance increased ({last_dist:.2f} -> {dist_to_target:.2f}); "
+                    f"reducing to (oscilation #{consecutive_increases})."
+                )
+                current_step_size = max(0.15, current_step_size * 0.5)
+            else:
+                consecutive_increases = 0
+                current_step_size = min(self.step_size, current_step_size * 1.2)
+            last_dist = dist_to_target
+
+            v_att_x = (dx / dist_to_target) * self.k_att
+            v_att_y = (dy / dist_to_target) * self.k_att
+
+            v_rep_x = 0.0
+            v_rep_y = 0.0
+            closest_obs_dist = None
+            for px, py in self.all_pillars:
+                if math.hypot(target['x'] - px, target['y'] - py) < 0.1:
+                    continue 
+
+                dist_obs = math.hypot(self.pose[0] - px, self.pose[1] - py)
+                if closest_obs_dist is None or dist_obs < closest_obs_dist:
+                    closest_obs_dist = dist_obs
+
+                dist_obs_clamped = max(dist_obs, self.min_obs_dist)
+                if dist_obs_clamped < self.d_safe:
+                    rep_mag = self.k_rep * (1.0 / dist_obs_clamped - 1.0 / self.d_safe) * (1.0 / (dist_obs_clamped ** 2))
+                    rep_mag = min(rep_mag, self.rep_mag_max)  # CAP: evita explosao da forca
+                    v_rep_x += ((self.pose[0] - px) / dist_obs_clamped) * rep_mag
+                    v_rep_y += ((self.pose[1] - py) / dist_obs_clamped) * rep_mag
+
+            vx = v_att_x + v_rep_x
+            vy = v_att_y + v_rep_y
+
+            v_mag = math.hypot(vx, vy)
+            if v_mag < 1e-6:
+                self.get_logger().warn("Warning!")
+                vx, vy = v_att_x, v_att_y
+                v_mag = math.hypot(vx, vy)
+
+            step = min(current_step_size, dist_to_target)
+            vx = (vx / v_mag) * step
+            vy = (vy / v_mag) * step
+
+            next_x = self.pose[0] + vx
+            next_y = self.pose[1] + vy
+
+            blend = max(0.0, min(1.0, 1.0 - (dist_to_target / 3.0)))
+            next_z = cruise_z + (target['z'] - cruise_z) * blend
+
+            if closest_obs_dist is not None and closest_obs_dist < self.d_safe:
+                self.get_logger().info(
+                    f"  passo={step:.2f}m  closest obstacle={closest_obs_dist:.2f}m  target_dist={dist_to_target:.2f}m"
+                )
+
+            self.go_absolute(next_x, next_y, next_z, yaw=0.0)
+
+        if steps >= self.max_steps_per_leg:
+            self.get_logger().error(f"Max target steps reached {target['id']}; aborting mission")
+
+        self.get_logger().info(f"Going to the final position {target['id']} (yaw={target_yaw:.2f})...")
+        self.go_absolute(target['x'], target['y'], target['z'], yaw=target_yaw, duration=2.5)
+        self.get_logger().info(f">> Reaching: {target['id']} <<<")
+        self.spin_for(2.0)
+
+    # ---------- Missao completa ----------
+
+    def run(self):
+        self.wait_for_pose(timeout=5.0)
+
+        start_xy = (self.pose[0], self.pose[1])
+
+        self.notify_stop()
+        ok = self.takeoff(height=1.0, duration=4.0)
+        if not ok:
+            self.get_logger().error("Takeoff failed, aborting mission")
+            return
+
+        self.climb_to(self.cruise_z, duration=3.0)
+
+        ordered_targets = self.order_targets_by_proximity(self.targets, start_xy)
+        self.get_logger().info(
+            "Order: " +
+            " -> ".join(t['id'] for t in ordered_targets)
+        )
+
+        for t in ordered_targets:
+            self.navigate_apf(t, self.cruise_z)
+            self.climb_to(self.cruise_z, duration=2.5)
+
+        self.land()
+        self.get_logger().info("Mission completed!")
+
+
+def main(args=None):
+    rclpy.init(args=args)
+
+    drone_id = DEFAULT_DRONE_ID
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            drone_id = int(arg)
+            break
+
+    node = DroneMission(drone_id)
+
+    try:
+        node.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
