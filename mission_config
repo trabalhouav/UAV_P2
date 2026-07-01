@@ -1,0 +1,56 @@
+import math
+
+# marcadores: id, drone designado, posicao (x,y,z)
+# orientation: roll, pitch, yaw  [rad]
+# rientacao + pose = PROPRIO marcador no Gazebo
+
+ALL_MARKERS = [
+    {'id': 'aruco_marker_0013', 'drone': 0, 'x': 4.83,  'y': 1.53,  'z': 1.06, 'roll': 1.57, 'pitch': 0, 'yaw': -1.57},
+    {'id': 'aruco_marker_0014', 'drone': 0, 'x': 7.60,  'y': 2.81,  'z': 2.38, 'roll': 1.57, 'pitch': 0, 'yaw':  1.57},
+    {'id': 'aruco_marker_0015', 'drone': 0, 'x': 8.16,  'y': 8.71,  'z': 1.93, 'roll': 1.57, 'pitch': 0, 'yaw': -1.57},
+    {'id': 'aruco_marker_0032', 'drone': 0, 'x': 6.05,  'y': 6.41,  'z': 1.06, 'roll': 1.57, 'pitch': 0, 'yaw':  2.85},
+
+    {'id': 'aruco_marker_0004', 'drone': 1, 'x': 0.53,  'y': -4.32, 'z': 3.12, 'roll': 1.57, 'pitch': 0, 'yaw': -0.29},
+    {'id': 'aruco_marker_0006', 'drone': 1, 'x': 0.45,  'y': -3.89, 'z': 1.01, 'roll': 1.57, 'pitch': 0, 'yaw': -2.45},
+    {'id': 'aruco_marker_0007', 'drone': 1, 'x': 0.75,  'y': -3.87, 'z': 2.27, 'roll': 1.57, 'pitch': 0, 'yaw':  2.65},
+    {'id': 'aruco_marker_0037', 'drone': 1, 'x': -1.24, 'y': -4.85, 'z': 1.30, 'roll': 1.57, 'pitch': 0, 'yaw':  1.87},
+    {'id': 'aruco_marker_0038', 'drone': 1, 'x': -1.73, 'y': -4.94, 'z': 2.16, 'roll': 1.57, 'pitch': 0, 'yaw': -1.47},
+
+    {'id': 'aruco_marker_0002', 'drone': 2, 'x': -2.24, 'y': 1.94,  'z': 1.00, 'roll': 1.57, 'pitch': 0, 'yaw':  3.04},
+    {'id': 'aruco_marker_0016', 'drone': 2, 'x': -3.86, 'y': 6.94,  'z': 1.79, 'roll': 1.57, 'pitch': 0, 'yaw':  1.57},
+    {'id': 'aruco_marker_0018', 'drone': 2, 'x': -2.67, 'y': 7.21,  'z': 2.94, 'roll': 1.57, 'pitch': 0, 'yaw': -1.57},
+    {'id': 'aruco_marker_0022', 'drone': 2, 'x': -8.67, 'y': 4.28,  'z': 0.54, 'roll': 1.57, 'pitch': 0, 'yaw': -0.29},
+    {'id': 'aruco_marker_0026', 'drone': 2, 'x': -2.16, 'y': 7.20,  'z': 1.26, 'roll': 1.57, 'pitch': 0, 'yaw':  1.47},
+    {'id': 'aruco_marker_0027', 'drone': 2, 'x': -8.83, 'y': 4.48,  'z': 1.44, 'roll': 1.57, 'pitch': 0, 'yaw': -1.47},
+
+    {'id': 'aruco_marker_0009', 'drone': 3, 'x': -2.01, 'y': -2.04, 'z': 1.98, 'roll': 1.57, 'pitch': 0, 'yaw': -1.28},
+    {'id': 'aruco_marker_0011', 'drone': 3, 'x': -5.92, 'y': -1.39, 'z': 2.06, 'roll': 1.57, 'pitch': 0, 'yaw': -1.57},
+    {'id': 'aruco_marker_0020', 'drone': 3, 'x': -7.65, 'y': -8.55, 'z': 2.30, 'roll': 1.57, 'pitch': 0, 'yaw':  3.14},
+    {'id': 'aruco_marker_0021', 'drone': 3, 'x': -7.49, 'y': -9.01, 'z': 2.98, 'roll': 1.57, 'pitch': 0, 'yaw':  0.69},
+    {'id': 'aruco_marker_0024', 'drone': 3, 'x': -1.93, 'y': -2.18, 'z': 0.96, 'roll': 1.57, 'pitch': 0, 'yaw': -0.69},
+    {'id': 'aruco_marker_0035', 'drone': 3, 'x': -5.88, 'y': -1.26, 'z': 0.67, 'roll': 1.57, 'pitch': 0, 'yaw': -2.06},
+    {'id': 'aruco_marker_0039', 'drone': 3, 'x': -7.77, 'y': -9.03, 'z': 0.87, 'roll': 1.57, 'pitch': 0, 'yaw': -0.49},
+
+    {'id': 'aruco_marker_0017', 'drone': 4, 'x': 1.25,  'y': -6.59, 'z': 1.75, 'roll': 1.57, 'pitch': 0, 'yaw':  0.00},
+    {'id': 'aruco_marker_0019', 'drone': 4, 'x': 4.89,  'y': -4.35, 'z': 1.70, 'roll': 1.57, 'pitch': 0, 'yaw': -1.57},
+    {'id': 'aruco_marker_0025', 'drone': 4, 'x': 6.51,  'y': -2.18, 'z': 1.02, 'roll': 1.57, 'pitch': 0, 'yaw': -0.29},
+    {'id': 'aruco_marker_0029', 'drone': 4, 'x': 7.67,  'y': -5.25, 'z': 2.06, 'roll': 1.57, 'pitch': 0, 'yaw':  0.69},
+]
+
+# Pilares = posicao (x,y) de TODOS os marcadores (qualquer marcador esta fixado num pilar fisico + obstaculo para qualquer drone)
+ALL_PILLARS = [(m['x'], m['y']) for m in ALL_MARKERS]
+
+
+def get_targets_for_drone(drone_id):
+    return [m for m in ALL_MARKERS if m['drone'] == drone_id]
+
+
+def yaw_to_face_marker(marker_yaw):
+    """
+    Converte o yaw do PROPRIO marcador (pose dele no Gazebo) para o yaw que
+    o DRONE deve assumir para ficar de frente para o marcador (camera
+    apontando para a placa).
+    """
+    yaw = marker_yaw + math.pi  # normalização do intervalo
+    yaw = math.atan2(math.sin(yaw), math.cos(yaw))
+    return yaw
